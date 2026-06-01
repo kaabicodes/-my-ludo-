@@ -157,16 +157,12 @@ export class LudoGame {
   }
 
   private resetTurnTimer() {
-    if (this.turnTimeout) clearTimeout(this.turnTimeout);
-    
-    const activePlayer = this.players[this.currentTurnIndex];
-    if (activePlayer.isBot) return; // No timeout for bots, they move automatically!
-
-    this.turnTimeout = setTimeout(() => {
-      console.log(`[LudoGame] Room ${this.roomId} turn timeout for ${this.players[this.currentTurnIndex].id}`);
-      this.io.to(this.roomId).emit('TURN_TIMEOUT', { playerId: this.players[this.currentTurnIndex].id });
-      this.nextTurn();
-    }, 15000); // 15 seconds per turn
+    // Turn timeout completely removed! 
+    // The game will wait indefinitely for the user to make a move.
+    if (this.turnTimeout) {
+      clearTimeout(this.turnTimeout);
+      this.turnTimeout = null;
+    }
   }
 
   private handleRollDice(playerId: string) {
