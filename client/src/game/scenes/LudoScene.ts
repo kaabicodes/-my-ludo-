@@ -8,6 +8,7 @@ export class LudoScene extends Phaser.Scene {
   private activePlayerId: string = '';
   private currentRollValue: number | null = null;
   private myPlayerId: string = '';
+  private animatingPawns: Set<string> = new Set();
 
   private tileSize: number = 800 / 15;
   private offset: number = (800 / 15) / 2;
@@ -93,6 +94,7 @@ export class LudoScene extends Phaser.Scene {
     socketClient.on('DICE_RESULT', this.handleDiceResult.bind(this));
     socketClient.on('PAWN_MOVED', this.handlePawnMoved.bind(this));
     socketClient.on('PAWN_ELIMINATED', this.handlePawnEliminated.bind(this));
+    socketClient.on('PAWN_FINISHED', this.handlePawnFinished.bind(this));
     socketClient.on('TURN_CHANGED', this.handleTurnChanged.bind(this));
 
     // Handle race condition: if match has already started before this scene is created
@@ -433,13 +435,27 @@ export class LudoScene extends Phaser.Scene {
       return;
     }
 
+    this.animatingPawns.add(data.pawnId);
     let delay = 0;
 
     // Chain arc twens for each step
-    path.forEach((globalPosIdx: number) => {
-      const coords = this.TRACK_COORDS[globalPosIdx];
-      const targetX = coords[0] * this.tileSize + this.offset;
-      const targetY = coords[1] * this.tileSize + this.offset;
+    path.forEach((step: { type: string, index: number }) => {
+      let targetX = 0;
+      let targetY = 0;
+
+      if (step.type === 'GLOBAL') {
+        const coords = this.TRACK_COORDS[step.index];
+        targetX = coords[0] * this.tileSize + this.offset;
+        targetY = coords[1] * this.tileSize + this.offset;
+      } else if (step.type === 'HOME') {
+        const color = this.getPawnColor(data.pawnId);
+        const coords = this.HOME_STRAIGHTS[color][step.index - 100];
+        targetX = coords[0] * this.tileSize + this.offset;
+        targetY = coords[1] * this.tileSize + this.offset;
+      } else if (step.type === 'FINISH') {
+        targetX = 400;
+        targetY = 400;
+      }
 
       this.time.delayedCall(delay, () => {
         this.tweens.add({
@@ -465,6 +481,7 @@ export class LudoScene extends Phaser.Scene {
 
     // Wait for all hops to complete, then group/stack pawns perfectly
     this.time.delayedCall(delay + 50, () => {
+      this.animatingPawns.delete(data.pawnId);
       this.updatePawnPositions();
     });
   }
@@ -473,6 +490,8 @@ export class LudoScene extends Phaser.Scene {
     this.localPawnPositions.set(data.victim_pawn_id, -1);
     const victim = this.pawnsMap.get(data.victim_pawn_id);
     if (!victim || data.victim_global_position === undefined) return;
+
+    this.animatingPawns.add(data.victim_pawn_id);
 
     // Step-by-step reverse animation
     const color = data.victim_color as 'RED' | 'GREEN' | 'YELLOW' | 'BLUE';
@@ -518,9 +537,83 @@ export class LudoScene extends Phaser.Scene {
         onComplete: () => {
           victim.setScale(1);
           victim.setAlpha(1);
+          this.animatingPawns.delete(data.victim_pawn_id);
           this.updatePawnPositions();
         }
       });
+    });
+  }
+
+  private handlePawnFinished(data: any) {
+    const color = data.color as 'RED' | 'GREEN' | 'YELLOW' | 'BLUE';
+    const hex = this.COLOR_HEX[color];
+
+    // 1. Blink the Dice Background Pentagon/Square
+    this.tweens.addCounter({
+      from: 0,
+      to: 100,
+      duration: 300,
+      yoyo: true,
+      repeat: 3,
+      onUpdate: (tween) => {
+        const val = Math.floor(tween.getValue());
+        this.diceBackground.clear();
+        this.diceBackground.fillStyle(hex, val / 100);
+        this.diceBackground.lineStyle(4, 0xffd700, 1);
+        this.diceBackground.fillRoundedRect(-this.tileSize * 0.5, -this.tileSize * 0.5, this.tileSize, this.tileSize, 10);
+        this.diceBackground.strokeRoundedRect(-this.tileSize * 0.5, -this.tileSize * 0.5, this.tileSize, this.tileSize, 10);
+      },
+      onComplete: () => {
+        this.highlightTurnOwner(); // Reset
+      }
+    });
+
+    // 2. Blink the Home Triangle
+    const triangleGfx = this.add.graphics();
+    triangleGfx.fillStyle(0xffffff, 0.8);
+    triangleGfx.beginPath();
+    if (color === 'RED') {
+      triangleGfx.moveTo(320, 320); triangleGfx.lineTo(320, 480); triangleGfx.lineTo(400, 400);
+    } else if (color === 'GREEN') {
+      triangleGfx.moveTo(320, 320); triangleGfx.lineTo(480, 320); triangleGfx.lineTo(400, 400);
+    } else if (color === 'YELLOW') {
+      triangleGfx.moveTo(480, 320); triangleGfx.lineTo(480, 480); triangleGfx.lineTo(400, 400);
+    } else if (color === 'BLUE') {
+      triangleGfx.moveTo(320, 480); triangleGfx.lineTo(480, 480); triangleGfx.lineTo(400, 400);
+    }
+    triangleGfx.closePath();
+    triangleGfx.fillPath();
+
+    this.tweens.add({
+      targets: triangleGfx,
+      alpha: 0,
+      duration: 300,
+      yoyo: true,
+      repeat: 3,
+      onComplete: () => {
+        triangleGfx.destroy();
+      }
+    });
+
+    // 3. Blink the Starting Yard
+    const yardGfx = this.add.graphics();
+    const yardPositions = { RED: [0, 0], GREEN: [9, 0], YELLOW: [9, 9], BLUE: [0, 9] };
+    const px = yardPositions[color][0] * this.tileSize + (this.tileSize * 3);
+    const py = yardPositions[color][1] * this.tileSize + (this.tileSize * 3);
+    const size = this.tileSize * 6;
+    
+    yardGfx.fillStyle(0xffffff, 0.5);
+    yardGfx.fillRect(px - size/2 + 2, py - size/2 + 2, size - 4, size - 4);
+    
+    this.tweens.add({
+      targets: yardGfx,
+      alpha: 0,
+      duration: 300,
+      yoyo: true,
+      repeat: 3,
+      onComplete: () => {
+        yardGfx.destroy();
+      }
     });
   }
 
@@ -568,7 +661,9 @@ export class LudoScene extends Phaser.Scene {
       const baseCoords = this.getSpotBaseCoords(type, color, parseInt(position));
 
       if (pawnIds.length === 1) {
-        const container = this.pawnsMap.get(pawnIds[0]);
+        const id = pawnIds[0];
+        if (this.animatingPawns.has(id)) return;
+        const container = this.pawnsMap.get(id);
         if (container) {
           container.setPosition(baseCoords.x, baseCoords.y);
           container.setScale(1);
@@ -580,6 +675,7 @@ export class LudoScene extends Phaser.Scene {
         const spacing = this.tileSize * 0.22;
 
         pawnIds.forEach((id, idx) => {
+          if (this.animatingPawns.has(id)) return;
           const container = this.pawnsMap.get(id);
           if (!container) return;
 
@@ -646,6 +742,9 @@ export class LudoScene extends Phaser.Scene {
         y: cy + offset[1] * (this.tileSize * 0.7)
       };
     } else if (type === 'HOME') {
+      if (position === 105) {
+        return { x: 400, y: 400 };
+      }
       // Home Straight path coordinate
       const straightCoords = this.HOME_STRAIGHTS[c][position - 100];
       return {

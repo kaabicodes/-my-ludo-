@@ -242,7 +242,7 @@ export class LudoGame {
     const rollVal = this.lastRoll;
 
     // Calculate new position
-    const pathTaken: number[] = [];
+    const pathTaken: { type: 'GLOBAL' | 'HOME' | 'FINISH', index: number }[] = [];
     let newPosition = pawn.position;
     let newGlobal = pawn.globalPosition;
     
@@ -250,7 +250,7 @@ export class LudoGame {
       // Spawn
       newPosition = 0; // Relative start
       newGlobal = START_POSITIONS[activePlayer.color];
-      pathTaken.push(newGlobal);
+      pathTaken.push({ type: 'GLOBAL', index: newGlobal });
     } else {
       // Move forward
       for (let i = 0; i < rollVal; i++) {
@@ -258,12 +258,18 @@ export class LudoGame {
           // Enter home straight
           newPosition = 100;
           newGlobal = -1; // No longer on global track
+          pathTaken.push({ type: 'HOME', index: newPosition });
         } else if (newPosition >= 100) {
           newPosition++;
+          if (newPosition === 105) {
+            pathTaken.push({ type: 'FINISH', index: 105 });
+          } else {
+            pathTaken.push({ type: 'HOME', index: newPosition });
+          }
         } else {
           newPosition++;
           newGlobal = (newGlobal + 1) % 52;
-          pathTaken.push(newGlobal);
+          pathTaken.push({ type: 'GLOBAL', index: newGlobal });
         }
       }
     }
@@ -283,6 +289,10 @@ export class LudoGame {
     // Check for reach home bonus turn
     if (newPosition === 105) {
       bonusTurn = true;
+      this.io.to(this.roomId).emit('PAWN_FINISHED', {
+        pawnId: pawn.id,
+        color: activePlayer.color
+      });
     }
 
     // Check for elimination
